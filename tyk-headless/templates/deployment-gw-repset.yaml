@@ -48,14 +48,20 @@ spec:
       affinity:
 {{ toYaml .Values.gateway.affinity | indent 8 }}
 {{- end }}
-      initContainers: 
+      initContainers:
       - name: "setup-directories"
         image: busybox:1.32
-        command: ['sh','-c','mkdir -p apps middleware policies']
+        command: ['sh','-c','mkdir -p apps middleware policies & touch policies/policies.json']
         workingDir: /mnt/tyk-gateway
         volumeMounts:
           - name: tyk-scratch
-            mountPath: /mnt/tyk-gateway        
+            mountPath: /mnt/tyk-gateway
+          {{- if .Values.gateway.mounts }}
+          {{- range $secret := .Values.gateway.mounts }}
+          - name: {{ $.Release.Name }}-gateway-secret-{{ $secret.name }}
+            mountPath: {{ $secret.mountPath }}
+          {{- end }}
+          {{- end }}
       containers:
       - name: gateway-{{ .Chart.Name }}
         image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
@@ -75,24 +81,32 @@ spec:
           - name: TYK_GW_CONTROLAPIPORT
             value: "{{ .Values.gateway.control.containerPort }}"
           {{- end }}
+          # Lagacy support for Redis Cluster driver. Driver dropped in v3.0.0.
           - name: REDIGOCLUSTER_SHARDCOUNT
-            value: "{{ .Values.redis.shardCount }}"
+            value: "128"
           - name: TYK_GW_STORAGE_ADDRS
-            {{- if and .Values.redis.host .Values.redis.port }}
-            value: "{{ .Values.redis.host }}:{{ .Values.redis.port }}"
-            {{- else }}
-            value: "{{ join "," .Values.redis.addrs }}"
-            {{- end }}
+            value: {{ include "tyk-headless.redis_url" . | quote }}
           - name: TYK_GW_STORAGE_ENABLECLUSTER
             value: "{{ default "false" .Values.redis.enableCluster }}"
+          - name: TYK_GW_STORAGE_DATABASE
+            value: "{{ default "0" .Values.redis.storage.database }}"
           - name: TYK_GW_STORAGE_PASSWORD
-            value: "{{ .Values.redis.pass }}"
+            valueFrom:
+              secretKeyRef:
+                name: {{ if .Values.secrets.useSecretName }} {{ .Values.secrets.useSecretName }} {{ else }} secrets-{{ include "tyk-headless.fullname" . }} {{ end}}
+                key: redisPass
           - name: TYK_GW_STORAGE_USESSL
-            value: "{{ .Values.redis.useSSL }}"
+            value: "{{ default "false" .Values.redis.useSSL }}"
           - name: TYK_GW_SECRET
-            value: "{{ .Values.secrets.APISecret }}"
+            valueFrom:
+              secretKeyRef:
+                name: {{ if .Values.secrets.useSecretName }} {{ .Values.secrets.useSecretName }} {{ else }} secrets-{{ include "tyk-headless.fullname" . }} {{ end}}
+                key: APISecret
           - name: TYK_GW_NODESECRET
-            value: "{{ .Values.secrets.APISecret }}"
+            valueFrom:
+              secretKeyRef:
+                name: {{ if .Values.secrets.useSecretName }} {{ .Values.secrets.useSecretName }} {{ else }} secrets-{{ include "tyk-headless.fullname" . }} {{ end}}
+                key: APISecret
           - name: TYK_GW_HTTPSERVEROPTIONS_USESSL
             value: "{{ .Values.gateway.tls }}"
             {{- if .Values.pump.enabled }}
@@ -125,7 +139,11 @@ spec:
           httpGet:
             scheme: "HTTP{{ if .Values.gateway.tls }}S{{ end }}"
             path: /hello
+            {{- if and .Values.gateway.control.enabled (or (semverCompare "^3.2.x" (include "tyk-headless.gateway-version" . )) (semverCompare ">=3.0.4 < 3.1.0" (include "tyk-headless.gateway-version" .))) }}
+            port: {{ .Values.gateway.control.containerPort }}
+            {{- else }}
             port: {{ .Values.gateway.containerPort }}
+            {{- end }}
           initialDelaySeconds: 5
           periodSeconds: 2
           timeoutSeconds: 3
@@ -134,7 +152,11 @@ spec:
           httpGet:
             scheme: "HTTP{{ if .Values.gateway.tls }}S{{ end }}"
             path: /hello
+            {{- if and .Values.gateway.control.enabled (or (semverCompare "^3.2.x" (include "tyk-headless.gateway-version" . )) (semverCompare ">=3.0.4 < 3.1.0" (include "tyk-headless.gateway-version" .))) }}
+            port: {{ .Values.gateway.control.containerPort }}
+            {{- else }}
             port: {{ .Values.gateway.containerPort }}
+            {{- end }}
           initialDelaySeconds: 1
           periodSeconds: 10
           timeoutSeconds: 3
@@ -154,3 +176,10 @@ spec:
         - name: {{ .Release.Name }}-default-cert
           secret:
             secretName: {{ .Release.Name }}-default-cert
+        {{- if .Values.gateway.mounts }}
+        {{- range $secret := .Values.gateway.mounts }}
+        - name: {{ $.Release.Name }}-gateway-secret-{{ $secret.name }}
+          secret:
+            secretName: {{ $.Release.Name }}-gateway-secret-{{ $secret.name }}
+        {{- end }}
+        {{- end }}

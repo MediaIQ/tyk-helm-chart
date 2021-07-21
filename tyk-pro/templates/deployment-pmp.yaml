@@ -51,34 +51,47 @@ spec:
             drop:
               - all
         env:
+          # Lagacy support for Redis Cluster driver. Driver dropped in v3.0.0.
           - name: REDIGOCLUSTER_SHARDCOUNT
-            value: "{{ .Values.redis.shardCount }}"
+            value: "128"
           - name: PMP_MONGO_MONGOURL
-            value: {{ include "tyk-pro.mongo_url" . | quote }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ if .Values.secrets.useSecretName }} {{ .Values.secrets.useSecretName }} {{ else }} secrets-{{ include "tyk-pro.fullname" . }} {{ end}}
+                key: mongoURL
           - name: PMP_MONGO_MONGOUSESSL
-            value: "{{ .Values.mongo.useSSL }}"
+            value: "{{ default "false" .Values.mongo.useSSL }}"
           - name: PMP_MONGOAGG_MONGOURL
-            value: {{ include "tyk-pro.mongo_url" . | quote }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ if .Values.secrets.useSecretName }} {{ .Values.secrets.useSecretName }} {{ else }} secrets-{{ include "tyk-pro.fullname" . }} {{ end}}
+                key: mongoURL
           - name: PMP_MONGOAGG_MONGOUSESSL
-            value:  "{{ .Values.mongo.useSSL }}"
+            value:  "{{ default "false" .Values.mongo.useSSL }}"
           - name: TYK_PMP_ANALYTICSSTORAGECONFIG_ADDRS
-            value: {{include "tyk-pro.redis_url" . |quote}}
+            value: {{ include "tyk-pro.redis_url" . | quote }}
           - name: TYK_PMP_ANALYTICSSTORAGECONFIG_ENABLECLUSTER
             value: "{{ default "false" .Values.redis.enableCluster }}"
           - name: TYK_PMP_ANALYTICSSTORAGECONFIG_PASSWORD
-            value: "{{ .Values.redis.pass }}"
+            valueFrom:
+              secretKeyRef:
+                name: {{ if .Values.secrets.useSecretName }} {{ .Values.secrets.useSecretName }} {{ else }} secrets-{{ include "tyk-pro.fullname" . }} {{ end}}
+                key: redisPass
           - name: TYK_PMP_ANALYTICSSTORAGECONFIG_REDISUSESSL
-            value: "{{ .Values.redis.useSSL }}"
-        {{- if .Values.pump.extraEnvs }}
-        {{- range $env := .Values.pump.extraEnvs }}
-          - name: {{ $env.name }}
-            value: {{ $env.value | quote }}
-        {{- end }}
-        {{- end }}
+            value: "{{ default "false" .Values.redis.useSSL }}"
+          {{- if .Values.pump.extraEnvs }}
+          {{- toYaml .Values.pump.extraEnvs| nindent 10 }}
+          {{- end }}
         command: ["/opt/tyk-pump/tyk-pump", "-c", "/etc/tyk-pump/pump.conf"]
         volumeMounts:
           - name: tyk-pump-conf
             mountPath: /etc/tyk-pump
+          {{- if .Values.pump.mounts }}
+          {{- range $secret := .Values.pump.mounts }}
+          - name: {{ $.Release.Name }}-pump-secret-{{ $secret.name }}
+            mountPath: {{ $secret.mountPath }}
+          {{- end }}
+          {{- end }}
         resources:
 {{ toYaml .Values.pump.resources | indent 12 }}
       securityContext:
@@ -91,4 +104,11 @@ spec:
             items:
               - key: pump.conf
                 path: pump.conf
+        {{- if .Values.pump.mounts }}
+        {{- range $secret := .Values.pump.mounts }}
+        - name: {{ $.Release.Name }}-pump-secret-{{ $secret.name }}
+          secret:
+            secretName: {{ $.Release.Name }}-pump-secret-{{ $secret.name }}
+        {{- end }}
+        {{- end }}
 {{- end}}
